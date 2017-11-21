@@ -2,6 +2,8 @@ package org.utd.cs.mln.alchemy.core;
 
 import org.utd.cs.gm.core.LogDouble;
 import org.utd.cs.gm.utility.Pair;
+import org.utd.cs.mln.alchemy.util.Aggregator;
+import org.utd.cs.mln.alchemy.util.VecOperations;
 
 import java.util.*;
 
@@ -14,7 +16,6 @@ public class State {
     public List<Set<Integer>> falseClausesSet = new ArrayList<>(); // for each groundformula, stores set of groundClauseIds which are false in this state
     public List<List<Integer>> numTrueLiterals = new ArrayList<>(); // for each groundformula, for each clauseId, stores numSatLiterals in that clause
     public List<List<Double>> wtsPerPredPerVal = new ArrayList<>(); // For each GroundPred, stores sat wts for each value
-    public ArrayList<Integer> lambdaGfIndicesList = new ArrayList<>();
 
     public State(GroundMLN groundMLN) {
         this.groundMLN  = groundMLN;
@@ -38,28 +39,33 @@ public class State {
     }
 
     public void setGroundFormulaWtsToParentWts(MLN mln) {
-        for(GroundFormula gf : groundMLN.groundFormulas)
-        {
-            int parentFormulaId = gf.parentFormulaId;
-            if(parentFormulaId != -1)
-                gf.weight = new LogDouble(mln.formulas.get(parentFormulaId).weight.getValue(), true);
-        }
+        groundMLN.setEffWts(mln);
     }
 
-    public void setGroundFormulaWtsToParentWtsSoftEvidence(MLN mln, double lambda) {
-        for(GroundFormula gf : groundMLN.groundFormulas)
-        {
-            int parentFormulaId = gf.parentFormulaId;
-            if(parentFormulaId != -1)
-                gf.weight = new LogDouble(mln.formulas.get(parentFormulaId).weight.getValue(), true);
-            else
-                gf.weight = new LogDouble(lambda*gf.originalWeight.getValue(),true);
-        }
-    }
-
-    public double[] getNumTrueGndings(int numWts)
+    public boolean isGroundFormulaTrue(GroundFormula gf)
     {
-        double []numTrueGndings = new double[numWts+1]; // last element is storing sum vj_nj for lambda calculation
+        boolean isFormulaSatisfied = true;
+        for (GroundClause gc : gf.groundClauses) {
+            boolean isClauseSatisfied = false;
+            for (Integer gpId : gc.groundPredIndices) {
+                BitSet b = gc.grounPredBitSet.get(gc.globalToLocalPredIndex.get(gpId));
+                int trueVal = truthVals.get(gpId);
+                isClauseSatisfied |= b.get(trueVal);
+                if (isClauseSatisfied)
+                    break;
+            }
+            isFormulaSatisfied &= isClauseSatisfied;
+            if (!isFormulaSatisfied)
+                break;
+        }
+        if (isFormulaSatisfied) {
+            return true;
+        }
+        return false;
+    }
+    public int[] getNumTrueGndings(int numWts)
+    {
+        int []numTrueGndings = new int[numWts];
         for(GroundFormula gf : groundMLN.groundFormulas)
         {
             boolean isFormulaSatisfied = true;
@@ -81,10 +87,7 @@ public class State {
             if(isFormulaSatisfied)
             {
                 int parentFormulaId = gf.parentFormulaId;
-                if(parentFormulaId != -1)
-                    numTrueGndings[parentFormulaId]++;
-                else
-                    numTrueGndings[numWts] += gf.weight.getValue();
+                numTrueGndings[parentFormulaId]++;
             }
         }
         return numTrueGndings;

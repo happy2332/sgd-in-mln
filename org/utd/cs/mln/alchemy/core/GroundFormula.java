@@ -12,9 +12,11 @@ import java.util.Set;
  */
 public class GroundFormula {
     public List<GroundClause> groundClauses = new ArrayList<>();
-    public Set<Integer> groundPredIndices = new HashSet<>();
+    public List<Integer> groundPredIndices = new ArrayList<>(); // stores gpIndices position wise
     public int formulaId; // index of this formula in the MLN's list of ground formulas
     public int parentFormulaId; // id of first order formula from which this came
     public LogDouble weight;
-    public  LogDouble originalWeight;
+    public LogDouble effWeight;
+    public List<Double> numConnections = new ArrayList<>();
+    public boolean isSatisfied;
 }

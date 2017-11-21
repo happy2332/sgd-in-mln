@@ -3,9 +3,9 @@ package org.utd.cs.mln.learning;
 import org.utd.cs.gm.core.LogDouble;
 import org.utd.cs.gm.utility.Timer;
 import org.utd.cs.mln.alchemy.core.*;
+import org.utd.cs.mln.alchemy.util.Aggregator;
 import org.utd.cs.mln.alchemy.util.Parser;
 import org.utd.cs.mln.inference.GibbsSampler_v2;
-import org.utd.cs.mln.alchemy.util.Pair;
 
 import java.io.*;
 import java.util.*;
@@ -15,13 +15,8 @@ import java.util.*;
  */
 public class DiscLearner {
 
-    private boolean priorSoftEvidence = false;
-    private double[] lambdaTrainCnts;
-    private double gdEta, gdConvergence = 1.0;
-    private double lambdaSoftEvidence = 1.0, oldLambdaSoftEvidence = 1.0;
-
     public enum Method {
-        CG, GD;
+        CG;
     };
 
     public List<GibbsSampler_v2> inferences = new ArrayList<>();
@@ -29,13 +24,13 @@ public class DiscLearner {
     public double[] weights, oldWeights, averageWeights, gradient, old_gradient, d, oldd,
             delta_pred, priorMeans, priorStdDevs;
     public double[][] formulaTrainCnts;
-    public int num_iter, domain_cnt, backtrackCount, maxBacktracks;
-    public double cg_lambda, cg_max_lambda, alpha, min_ll_change, lambda_grad;
+    public int num_iter, domain_cnt, backtrackCount, maxBacktracks, numParams;
+    public double cg_lambda, cg_max_lambda, alpha, min_ll_change;
     public boolean withEM = false, backtracked = false, preConditionCG, dldebug=true, usePrior=false;
     public Method method = Method.CG;
 
     public DiscLearner(List<GibbsSampler_v2> inferences, List<GibbsSampler_v2> inferencesEM, int num_iter, double lambda, double min_ll_change, double max_lambda,
-                       boolean withEM, boolean predConditionCG, boolean usePrior, boolean priorSoftEvidence)
+                       boolean withEM, boolean predConditionCG, boolean usePrior)
     {
         this.inferences = inferences;
         this.inferencesEM = inferencesEM;
@@ -50,49 +45,28 @@ public class DiscLearner {
         this.usePrior = usePrior;
         this.preConditionCG = predConditionCG;
         this.domain_cnt = inferences.size();
-        this.priorSoftEvidence = priorSoftEvidence;
-        int numFormulas = inferences.get(0).mln.formulas.size();
-        weights = new double[numFormulas];
-        oldWeights = new double[numFormulas];
-        averageWeights = new double[numFormulas];
-        gradient = new double[numFormulas];
-        old_gradient = new double[numFormulas];
-        d = new double[numFormulas];
-        oldd = new double[numFormulas];
+        this.numParams = inferences.get(0).mln.params.size();
+        weights = new double[numParams];
+        oldWeights = new double[numParams];
+        averageWeights = new double[numParams];
+        gradient = new double[numParams];
+        old_gradient = new double[numParams];
+        d = new double[numParams];
+        oldd = new double[numParams];
         delta_pred = null;
-        formulaTrainCnts = new double[domain_cnt][numFormulas];
-        lambdaTrainCnts = new double[domain_cnt];
-        priorMeans = new double[numFormulas];
-        priorStdDevs = new double[numFormulas];
+        formulaTrainCnts = new double[domain_cnt][numParams];
+        priorMeans = new double[numParams];
+        priorStdDevs = new double[numParams];
         Arrays.fill(priorStdDevs, 2);
     }
 
-    public DiscLearner(List<GibbsSampler_v2> inferences, List<GibbsSampler_v2> inferencesEM, int num_iter,
-                       boolean withEM, boolean usePrior, boolean priorSoftEvidence, double gdEta)
-    {
-        this.inferences = inferences;
-        this.inferencesEM = inferencesEM;
-        this.num_iter = num_iter;
-        this.withEM = withEM;
-        this.domain_cnt = inferences.size();
-        this.priorSoftEvidence = priorSoftEvidence;
-        this.gdEta = gdEta;
-        int numFormulas = inferences.get(0).mln.formulas.size();
-        weights = new double[numFormulas];
-        gradient = new double[numFormulas];
-        formulaTrainCnts = new double[domain_cnt][numFormulas];
-        lambdaTrainCnts = new double[domain_cnt];
-        priorMeans = new double[numFormulas];
-        priorStdDevs = new double[numFormulas];
-        Arrays.fill(priorStdDevs, 2);
-    }
-
-
-    public Pair<double[],Double> learnWeights()
+    public double[] learnWeights()
     {
         initWeights();
-        if(!withEM)
-            findFormulaTrainCnts();
+        if(!withEM) {
+            //findFormulaTrainCnts();
+            findParamTrainCnts();
+        }
 
         for (int i = 0; i < domain_cnt; i++) {
             inferences.get(i).saveAllCounts(true);
@@ -107,13 +81,14 @@ public class DiscLearner {
             if(iter%1 == 0) {
                 System.out.println("iter : " + iter + ", Elapsed Time : " + Timer.time((System.currentTimeMillis() - time) / 1000.0));
             }
+            if(iter == 15)
+                System.out.println("stop here");
             setMLNWeights();
             System.out.println("Running inference...");
             if(backtracked) {
                 burningIn = true;
                 isInit = true;
             }
-            findFormulaTrainCountsLambda();
             infer(burningIn, isInit);
             if(withEM)
                 inferEM(burningIn, isInit);
@@ -121,53 +96,25 @@ public class DiscLearner {
             isInit = false;
             System.out.println("Done Inference");
             System.out.println("Getting gradient...");
-            if(!priorSoftEvidence)
-                findGradient();
-            else
-                findJointGradient();
+            findGradient();
             if(dldebug)
                 System.out.println("gradient = " + Arrays.toString(gradient));
             if(method == Method.CG) {
                 int status = updateWtsByCG(iter);
-                if(dldebug)
-                {
-                    System.out.println("(weights) = " + Arrays.toString(weights));
-                    System.out.println("lambdaSoftEvidence = " + lambdaSoftEvidence);
-                }
                 if(status == -1)
                     break;
                 if (backtracked)
                     iter--;
             }
-            else if(method == Method.GD)
-            {
-                int status = updateWtsByGD();
-                if(dldebug)
-                {
-                    System.out.println("(weights) = " + Arrays.toString(weights));
-                    System.out.println("lambdaSoftEvidence = " + lambdaSoftEvidence);
-                }
-                if(status == -1)
-                    break;
-            }
         }
         System.out.println("Learning done...");
         System.out.println("Final weights : " + Arrays.toString(weights));
-        Pair<double[],Double> p = new Pair();
-        p.first = weights;
-        p.second = new Double(lambdaSoftEvidence);
-        return p;
-    }
-
-
-    // Computer dl/dw_i for n first order formulas and dl/dlambda
-    private void findJointGradient() {
-        findGradient(); // computes dl/dw_i
-        lambda_grad = findGradientForLambda();
+        return weights;
     }
 
     private void initWeights() {
-        MLN mln = inferences.get(0).mln;
+        //MLN mln = inferences.get(0).mln;
+
         if(usePrior)
         {
 //            for (int i = 0; i < mln.formulas.size(); i++) {
@@ -175,55 +122,31 @@ public class DiscLearner {
 //            }
             //Random rand = new Random(LearnTest.getSeed());
             Random rand = new Random();
-            for (int i = 0; i < mln.formulas.size(); i++) {
+            for (int i = 0; i < numParams; i++) {
                 double p = rand.nextGaussian()*priorStdDevs[i]+priorMeans[i];
+                p = 0.0;
                 //weights[i] = p;
-                weights[i]=0;
-            }
-            if(dldebug)
-            {
-                System.out.print("Initial weights : ");
-                for (int i = 0; i < weights.length; i++) {
-                    System.out.print(weights[i]+",");
-                }
-                System.out.println();
+                weights[i]=p;
+
             }
         }
         else
         {
             //Random rand = new Random(LearnTest.getSeed());
             Random rand = new Random();
-            for (int i = 0; i < mln.formulas.size(); i++) {
+            for (int i = 0; i < numParams; i++) {
                 double p = rand.nextDouble()*2-1; // generate random number b/w -1 and 1
                 weights[i] = p;
             }
         }
-    }
-
-
-    private int updateWtsByGD() {
-        int numWts = weights.length;
-        double maxChange = 0.0;
-        for (int i = 0; i < numWts; i++) {
-            double wChange = gdEta*gradient[i];
-            weights[i] -= wChange;
-            if(Math.abs(wChange) > maxChange)
-                maxChange = Math.abs(wChange);
+        if(dldebug)
+        {
+            System.out.print("Initial weights : ");
+            for (int i = 0; i < weights.length; i++) {
+                System.out.print(weights[i]+",");
+            }
+            System.out.println();
         }
-        double lChange = gdEta*lambda_grad;
-        System.out.println("lambda_grad = " + lambda_grad);
-        lambdaSoftEvidence += lChange;
-        if(Math.abs(lChange) > maxChange)
-            maxChange = Math.abs(lChange);
-        for (int i = 0; i < domain_cnt; i++) {
-            inferences.get(i).resetCnts();
-            if(withEM)
-                inferencesEM.get(i).resetCnts();
-        }
-        if(maxChange < gdConvergence)
-            return -1;
-        else
-            return 0;
     }
 
 
@@ -270,7 +193,7 @@ public class DiscLearner {
                 System.out.println("Backtracking...");
                 for (int i = 0; i < numWts; i++)
                     weights[i] = oldWeights[i];
-                lambdaSoftEvidence = oldLambdaSoftEvidence;
+
                 for (int i = 0; i < domain_cnt; i++)
                 {
                     inferences.get(i).restoreCnts();
@@ -314,8 +237,8 @@ public class DiscLearner {
                 }
                 if(dldebug)
                     System.out.println("variance : " + Arrays.toString(variance));
-                for (int formulaNum = 0; formulaNum < numWts; formulaNum++)
-                    preCond[formulaNum] = 1.0/variance[formulaNum];
+                for (int paramIndex = 0; paramIndex < numWts; paramIndex++)
+                    preCond[paramIndex] = 1.0/variance[paramIndex];
             }
             double beta = 0.0;
 
@@ -384,8 +307,6 @@ public class DiscLearner {
                 // above line was present in alchemy, but momentum is 0 always for disc learning
                 wchange[w] = d[w] * alpha;
             }
-            double lChange = 0.005*lambda_grad;
-            System.out.println("lambda_grad = " + lambda_grad);
 
             // Convergence criteria for 2nd order methods:
             // Stop when the maximum predicted improvement in log likelihood
@@ -400,15 +321,12 @@ public class DiscLearner {
             // Save weights, gradient, and direction and adjust the weights
             for (int w = 0; w < numWts; w++) {
                 oldWeights[w] = weights[w];
-                oldLambdaSoftEvidence = lambdaSoftEvidence;
                 oldd[w] = d[w];
                 old_gradient[w] = gradient[w];
 
                 weights[w] += wchange[w];
-                lambdaSoftEvidence += lChange;
                 averageWeights[w] = ((iter - 1) * averageWeights[w] + weights[w]) / iter;
             }
-
             delta_pred = getHessianVectorProduct(wchange);
             //TODO : delta pred for EM ?
             for (int i = 0; i < domain_cnt; i++) {
@@ -477,18 +395,18 @@ public class DiscLearner {
     // get variance of inferred counts for each formula
     private double[] getVariance(int numWts) {
         double []variance = new double[numWts];
-        for (int formulaNum = 0; formulaNum < numWts; formulaNum++) {
+        for (int paramIndex = 0; paramIndex < numWts; paramIndex++) {
 //            double sd = priorStdDevs[formulaNum];
 //            variance[formulaNum] = 1.0/(sd * sd);
             for (int i = 0; i < domain_cnt; i++) {
                 double trueCnts[] = inferences.get(i).numFormulaTrueCnts;
                 double trueSqCnts[] = inferences.get(i).numFormulaTrueSqCnts;
                 int numSamples = inferences.get(i).numIter;
-                double x   = trueCnts[formulaNum];
-                double xsq = trueSqCnts[formulaNum];
+                double x   = trueCnts[paramIndex];
+                double xsq = trueSqCnts[paramIndex];
 
-                // Add variance for this domain
-                variance[formulaNum] += xsq/numSamples - (x/numSamples)*(x/numSamples);
+
+                variance[paramIndex] += (xsq/numSamples - (x/numSamples)*(x/numSamples));
             }
         }
         return variance;
@@ -521,14 +439,15 @@ public class DiscLearner {
         return total;
     }
 
-    // For each
+    // This function finds total number of satisfied groundings for each first order formula
     private void findFormulaTrainCnts() {
+        List<Formula> formulas = inferences.get(0).mln.formulas;
         for (int i = 0; i < domain_cnt; i++) {
             GroundMLN gm = inferences.get(i).state.groundMLN;
             Evidence truth = inferences.get(i).truth;
-            for(int gfId = 0 ; gfId < gm.groundFormulas.size() ; gfId++)
+            for(GroundFormula gf : gm.groundFormulas)
             {
-                GroundFormula gf = gm.groundFormulas.get(gfId);
+                int numPreds = gf.numConnections.size();
                 boolean isFormulaSatisfied = true;
                 for(GroundClause gc : gf.groundClauses)
                 {
@@ -547,33 +466,28 @@ public class DiscLearner {
                     if(!isFormulaSatisfied)
                         break;
                 }
-                if(isFormulaSatisfied)
-                {
-                    int parentFormulaId = gf.parentFormulaId;
-                    if(parentFormulaId == -1)
-                    {
-                        lambdaTrainCnts[i] += gf.weight.getValue();
-                        inferences.get(i).state.lambdaGfIndicesList.add(gfId);
-
-                    }
-                    else{
-                        formulaTrainCnts[i][parentFormulaId]++;
-                    }
-
+                int parentFormulaId = gf.parentFormulaId;
+                if(isFormulaSatisfied) {
+                    formulaTrainCnts[i][parentFormulaId]++;
+                    List<Double> F_nj = Aggregator.aggregator(gf.numConnections);
+//                    for (int k = 0; k < numPreds; k++) {
+//                        double prevVal = perPredFormulaTrainCnts.get(i).get(parentFormulaId).get(k);
+//                        perPredFormulaTrainCnts.get(i).get(parentFormulaId).set(k, prevVal + F_nj.get(k));
+//                    }
                 }
             }
         }
     }
 
-    private void findFormulaTrainCountsLambda()
-    {
+    // This function finds total number of satisfied groundings for each first order formula
+    private void findParamTrainCnts() {
+        List<Formula> formulas = inferences.get(0).mln.formulas;
+        List<Param> params = inferences.get(0).mln.params;
         for (int i = 0; i < domain_cnt; i++) {
-            Arrays.fill(lambdaTrainCnts,0.0);
             GroundMLN gm = inferences.get(i).state.groundMLN;
             Evidence truth = inferences.get(i).truth;
-            for(int gfId : inferences.get(i).state.lambdaGfIndicesList)
+            for(GroundFormula gf : gm.groundFormulas)
             {
-                GroundFormula gf = gm.groundFormulas.get(gfId);
                 boolean isFormulaSatisfied = true;
                 for(GroundClause gc : gf.groundClauses)
                 {
@@ -592,111 +506,23 @@ public class DiscLearner {
                     if(!isFormulaSatisfied)
                         break;
                 }
-                if(isFormulaSatisfied)
-                {
-                    lambdaTrainCnts[i] += gf.weight.getValue();
+                int parentFormulaId = gf.parentFormulaId;
+                if(isFormulaSatisfied) {
+                    List<Integer> paramIndices = formulas.get(parentFormulaId).paramIndices;
+                    List<Double> F_nj = Aggregator.aggregator(gf.numConnections);
+                    for(int s : paramIndices)
+                    {
+                        if(params.get(s).formulaId != parentFormulaId)
+                        {
+                            System.out.println("Error !!!!! stop here");
+                        }
+                        int k = params.get(s).predPos;
+                        formulaTrainCnts[i][s] += F_nj.get(k);
+                    }
+
                 }
             }
         }
-    }
-    // used for pipelined learning of lambda
-    private static double findGradientForLambdaOld(List<GibbsSampler_v2> inferences)
-    {
-        double gradient = 0.0;
-        for (int i = 0; i < inferences.size() ; i++) {
-            gradient += findGradientForDomainForLambdaOld(inferences.get(i));
-        }
-        return gradient;
-    }
-
-    private static double findGradientForDomainForLambdaOld(GibbsSampler_v2 inference) {
-        Evidence evid = inference.truth;
-        double trueSumVjNj = findSummationWeights(inference.state.groundMLN, evid);
-        int num_Iter = 20;
-        double expectedSumVjNj = 0.0;
-        for (int i = 0; i < num_Iter; i++) {
-            inference.infer(false, true);
-            expectedSumVjNj += findSummationWeights(inference.state);
-        }
-        expectedSumVjNj /= num_Iter;
-        return trueSumVjNj - expectedSumVjNj;
-    }
-
-    private static double findSummationWeights(GroundMLN groundMln, Evidence evidence)
-    {
-        double result = 0.0;
-        for(GroundFormula gf : groundMln.groundFormulas)
-        {
-            if(gf.parentFormulaId == -1)
-            {
-                //check for satisfiability
-                GroundClause gc = gf.groundClauses.get(0);
-                BitSet b = gc.grounPredBitSet.get(0);
-                int gpIndex = gc.groundPredIndices.get(0);
-                int valTrue = evidence.predIdVal.get(gpIndex);
-//                int valTrue = state.truthVals.get(gpIndex);
-                if(b.get(valTrue))
-                    result += gc.weight.getValue();
-            }
-        }
-        return result;
-    }
-    // find sum_i(v_i*n_i)
-    private static double findSummationWeights(State state)
-    {
-        double result = 0.0;
-        GroundMLN groundMln = state.groundMLN;
-        for(GroundFormula gf : groundMln.groundFormulas)
-        {
-            if(gf.parentFormulaId == -1)
-            {
-                //check for satisfiability
-                GroundClause gc = gf.groundClauses.get(0);
-                BitSet b = gc.grounPredBitSet.get(0);
-                int gpIndex = gc.groundPredIndices.get(0);
-                int valTrue = state.truthVals.get(gpIndex);
-                if(b.get(valTrue))
-                    result += gc.weight.getValue();
-            }
-        }
-        return result;
-    }
-
-    private double findGradientForLambda()
-    {
-        double gradient = 0.0;
-        for (int i = 0; i < inferences.size() ; i++) {
-            gradient += findGradientForDomainForLambda(i);
-        }
-        return gradient;
-    }
-
-    private double findGradientForDomainForLambda(int domainIndex) {
-        double lambdaInferredCnts = inferences.get(domainIndex).numLambdaTrueCnts;
-        double lambdaInferredCntsEM = 0;
-        if(withEM)
-            lambdaInferredCntsEM = inferencesEM.get(domainIndex).numLambdaTrueCnts;
-
-        if(dldebug)
-        {
-            if(withEM)
-                System.out.println("FormulaNum\tEM Count\tInferred Count");
-            else
-                System.out.println("FormulaNum\tactual Count\tInferred Count");
-
-        }
-        lambdaInferredCnts /= inferences.get(domainIndex).numIter;
-        if(withEM)
-            lambdaInferredCntsEM /= inferencesEM.get(domainIndex).numIter;
-        if(dldebug)
-        {
-            System.out.println("lambdaInferredCnts = " + lambdaInferredCnts);
-            System.out.println("lambdaTrainCnts = " + lambdaTrainCnts[domainIndex]);
-        }
-        if(withEM)
-             return lambdaInferredCntsEM - lambdaInferredCnts;
-        else
-           return lambdaTrainCnts[domainIndex] - lambdaInferredCnts;
     }
 
     private void findGradient()
@@ -745,7 +571,9 @@ public class DiscLearner {
             if(withEM)
                 gradient[j] -= (inferredCountEM - inferredCount);
             else
+            {
                 gradient[j] -= (formulaTrainCnts[domainIndex][j] - inferredCount);
+            }
         }
     }
 
@@ -754,8 +582,7 @@ public class DiscLearner {
         MLN mln = inferences.get(0).mln;
         for (int i = 0; i < domain_cnt; i++) {
             State state = inferences.get(i).state;
-            //state.setGroundFormulaWtsToParentWts(mln);
-            state.setGroundFormulaWtsToParentWtsSoftEvidence(mln, lambdaSoftEvidence);
+            state.setGroundFormulaWtsToParentWts(mln);
             inferences.get(i).updateWtsForNextGndPred(0);
             System.out.println("Doing inference for domain " + i);
             inferences.get(i).infer(burningIn, isInit);
@@ -777,14 +604,30 @@ public class DiscLearner {
     private void setMLNWeights()
     {
         MLN mln = inferences.get(0).mln;
-        int numFormulas = mln.formulas.size();
-        for (int i = 0; i < numFormulas ; i++)
-        {
-            mln.formulas.get(i).weight = new LogDouble(weights[i], true);
+        int numParams = mln.params.size();
+        for (int i = 0; i < numParams ; i++) {
+            //mln.formulas.get(i).weight = new LogDouble(weights[i], true);
+            //mln.formulas.get(i).perPredWeight.clear();
+            mln.params.get(i).wt = new LogDouble(weights[i],true);
         }
     }
 
     public void writeWeights(String mln_file, String out_file, double []weights) throws FileNotFoundException {
+        List<List<Double>> weights2d = new ArrayList<>();
+        MLN mln = inferences.get(0).mln;
+        int numFormulas = inferences.get(0).mln.formulas.size();
+        for (int formulaNum = 0; formulaNum < numFormulas; formulaNum++) {
+            weights2d.add(new ArrayList<Double>());
+            int numPreds = mln.formulas.get(formulaNum).paramIndices.size();
+            for (int n = 0; n < numPreds; n++) {
+                weights2d.get(weights2d.size()-1).add(0.0);
+            }
+        }
+        for (int w = 0; w < weights.length; w++) {
+            int i = mln.params.get(w).formulaId;
+            int k = mln.params.get(w).predPos;
+            weights2d.get(i).set(k,weights[w]);
+        }
         Scanner scanner = new Scanner(new BufferedReader(new InputStreamReader(new FileInputStream(mln_file))));
         PrintWriter pw = new PrintWriter(out_file);
         boolean isformula = false;
@@ -806,7 +649,14 @@ public class DiscLearner {
                 continue;
             } else {
                 String[] formulaArr = line.split(Parser.WEIGHTSEPARATOR);
-                pw.printf(formulaArr[0] + Parser.WEIGHTSEPARATOR + "%.3f\n",weights[formulaNum]);
+                String wtString = "";
+                int numPreds = weights2d.get(formulaNum).size();
+                for (int p = 0; p < numPreds; p++) {
+                    wtString += String.format("%.3f",weights2d.get(formulaNum).get(p));
+                    if(p < numPreds-1)
+                        wtString += ",";
+                }
+                pw.printf(formulaArr[0] + Parser.WEIGHTSEPARATOR + wtString + "\n");
                 formulaNum++;
             }
         }

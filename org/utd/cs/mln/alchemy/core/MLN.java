@@ -26,7 +26,7 @@ public class MLN {
 	public Map<Integer, ArrayList<Integer>> predicateDomainMap;
 	public List<WClause> clauses = new ArrayList<WClause>();
 	public List<Formula> formulas = new ArrayList<Formula>();
-	public double numSubNetworks = 1;
+	public List<Param> params = new ArrayList<>();
 
 	public MLN(MLN mln){
 		for(WClause clause : mln.clauses) {
@@ -354,6 +354,30 @@ public class MLN {
         }
 
     }
+
+
+	public void calculateNumConnections()
+	{
+		for(Formula formula : formulas)
+		{
+			for(WClause clause : formula.clauses) {
+				for (Atom atom : clause.atoms) {
+					Set<Term> atomTermSet = new HashSet<>();
+					for (Term term : atom.terms) {
+						atomTermSet.add(term);
+					}
+					Set<Term> tempTermSet = new HashSet<>(formula.termsSet);
+					tempTermSet.removeAll(atomTermSet);
+					double num = 1.0;
+					for (Term t : tempTermSet) {
+						num *= t.domain.size();
+					}
+					formula.numConnections.add(num);
+				}
+			}
+			System.out.println("formula = " + formula);
+		}
+	}
 
 
 	/*

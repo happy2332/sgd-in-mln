@@ -12,6 +12,7 @@ public class GroundPredicate {
     public List<Integer> terms = new ArrayList<>();
     public int numPossibleValues; //Stores number of possible values of this groundPred
     public Map<Integer, Set<Integer>> groundFormulaIds = new HashMap<>(); // Stores which clauses this groundPred occurs in. Key : FormulaId, value : Set of cluaseIds in that formulaId in which this groundpred occurs.
+    public boolean isEvidence = false;
 
     @Override
     public String toString() {

@@ -6,8 +6,6 @@ import org.utd.cs.mln.alchemy.core.Formula;
 import org.utd.cs.mln.alchemy.core.GroundMLN;
 import org.utd.cs.mln.alchemy.core.MLN;
 import org.utd.cs.mln.alchemy.util.FullyGrindingMill;
-//import org.utd.cs.mln.alchemy.util.GrindingMill;
-import org.utd.cs.mln.alchemy.util.Pair;
 import org.utd.cs.mln.alchemy.util.Parser;
 import org.utd.cs.mln.inference.GibbsSampler_v2;
 
@@ -25,10 +23,10 @@ public class LearnTest {
     private static final String REGEX_ESCAPE_CHAR = "\\";
     private static int numIter=100, numSamples=200;
     private static String mlnFile, outFile;
-    private static String []evidenceFiles, truthFiles, softEvidenceFiles;
+    private static String []evidenceFiles, truthFiles;
     private static boolean queryEvidence=false, withEM=false, usePrior=false;
     private static int numDb;
-    private static double minllChange = 5; // changed from 10^-5 to 1 so that numIter reduces
+    private static double minllChange = 0.0001; // changed from 10^-5 to 1 so that numIter reduces
     private static List<String> evidPreds, hiddenPreds, queryPreds = null, openWorldPreds, closedWorldPreds;
 
     public static long getSeed(){
@@ -39,14 +37,12 @@ public class LearnTest {
     private enum ArgsState{
         MlnFile,
         EvidFiles,
-        SoftEvidFiles,
         TruthFiles,
         OutFile,
         OpenWorld,
         ClosedWorld,
         NumIter,
-        EvidPreds, QueryPreds, HiddenPreds, Flag, NumSamples,
-        MinLLChange
+        EvidPreds, QueryPreds, HiddenPreds, Flag, NumSamples
     }
     public static void main(String []args) throws FileNotFoundException, CloneNotSupportedException {
         long totaltime = System.currentTimeMillis();
@@ -66,8 +62,6 @@ public class LearnTest {
         List<GibbsSampler_v2> inferences = new ArrayList<>();
         List<GibbsSampler_v2> inferencesEM = new ArrayList<GibbsSampler_v2>();
         FullyGrindingMill fgm = new FullyGrindingMill();
-        //GrindingMill gm = new GrindingMill();
-        List<Evidence> truths = new ArrayList<>();
         for(int i = 0 ; i < numDb ; i++)
         {
             MLN mln = new MLN();
@@ -75,25 +69,24 @@ public class LearnTest {
             Parser parser = new Parser(mln);
             parser.parseInputMLNFile(mlnFile);
             System.out.println("DB file "+(i+1));
-            String files[] = new String[1];
-            //files[0] = evidenceFiles[i];
-            files[0] = truthFiles[i];
+            String files[] = new String[2];
+            files[0] = evidenceFiles[i];
+            files[1] = truthFiles[i];
             //TODO : for now, we send only truth file to collectDomain, otherwise send both truth and evidence.
             // We assume that there is no new constant in evidence.
             Map<String, Set<Integer>> varTypeToDomain = parser.collectDomain(files);
             mln.overWriteDomain(varTypeToDomain);
             System.out.println("Creating MRF...");
             long time = System.currentTimeMillis();
-            //Set<String> evidenceSet = parser.createEvidenceSet(evidenceFiles[i]);
             GroundMLN groundMln = fgm.ground(mln);
             System.out.println("Total number of ground formulas before handling evidence : " + groundMln.groundFormulas.size());
             Evidence evidence = parser.parseEvidence(groundMln,evidenceFiles[i]);
             Evidence truth = parser.parseEvidence(groundMln,truthFiles[i]);
-            truths.add(truth);
-            //Map<Integer, List<Integer>> featureVectors = fgm.getFeatureVectors(groundMln, mln.formulas.size(), truth, "person", varTypeToDomain.get("person"), true);
-            //writeFeatures(featureVectors,i+1);
             GroundMLN newGroundMln = fgm.handleEvidence(groundMln, evidence, truth, evidPreds, queryPreds, hiddenPreds, false);
-            newGroundMln = fgm.addSoftEvidence(newGroundMln, softEvidenceFiles[i]);
+            //fgm.countFormulaGndings(newGroundMln, mln);
+            //fgm.countFormulaConnections(newGroundMln, mln);
+            newGroundMln.setNumConnections();
+            newGroundMln.setEffWts(mln);
             GibbsSampler_v2 gs = new GibbsSampler_v2(mln, newGroundMln, truth, 100, numSamples, true, false);
             inferences.add(gs);
 
@@ -113,29 +106,11 @@ public class LearnTest {
         }
 
         // Start learning
-        //DiscLearner dl = new DiscLearner(inferences, inferencesEM, numIter, withEM, usePrior, true, 0.005);
-        DiscLearner dl = new DiscLearner(inferences, inferencesEM, numIter, 100.0, minllChange, Double.MAX_VALUE, withEM, true, usePrior, true);
-        Pair<double[],Double> weightsLambda = dl.learnWeights();
+        DiscLearner dl = new DiscLearner(inferences, inferencesEM, numIter, 100.0, minllChange, Double.MAX_VALUE, withEM, true, usePrior);
 
-        // Run gradient descent to learn lambda
-        // first add soft evidence to grounded mln
-
-        dl.writeWeights(mlnFile, outFile, weightsLambda.first);
-        System.out.println("lambda = " + weightsLambda.second);
+        double [] weights = dl.learnWeights();
+        dl.writeWeights(mlnFile, outFile, weights);
         System.out.println("Total Time taken : " + Timer.time((System.currentTimeMillis() - totaltime)/1000.0));
-    }
-
-    private static void writeFeatures(Map<Integer, List<Integer>> featureVectors, int db) throws FileNotFoundException {
-        PrintWriter pw = new PrintWriter("data/imdb/features/features."+db+".txt");
-        for(int constant : featureVectors.keySet())
-        {
-            for(int val : featureVectors.get(constant))
-            {
-                pw.write(val+",");
-            }
-            pw.write(constant+"\n");
-        }
-        pw.close();
     }
 
     private static void parseArgs(String[] args) {
@@ -161,12 +136,6 @@ public class LearnTest {
                 case EvidFiles: // if not given, will be empty file
                     evidenceFiles = arg.split(",");
                     System.out.println("-e = " + arg);
-                    state = ArgsState.Flag;
-                    continue;
-
-                case SoftEvidFiles: // if not given, will be empty file
-                    softEvidenceFiles = arg.split(",");
-                    System.out.println("-se = " + arg);
                     state = ArgsState.Flag;
                     continue;
 
@@ -221,11 +190,7 @@ public class LearnTest {
 
                 case NumSamples: // by default, it is 100
                     numSamples = Integer.parseInt(arg);
-                    state = ArgsState.Flag;
-                    continue;
 
-                case MinLLChange: // by default, it is 5
-                    minllChange = Double.parseDouble(arg);
                     state = ArgsState.Flag;
                     continue;
 
@@ -237,10 +202,6 @@ public class LearnTest {
                     else if(arg.equals(("-e")))
                     {
                         state = ArgsState.EvidFiles;
-                    }
-                    else if(arg.equals(("-se")))
-                    {
-                        state = ArgsState.SoftEvidFiles;
                     }
                     else if(arg.equals(("-t")))
                     {
@@ -287,10 +248,6 @@ public class LearnTest {
                     {
                         state = ArgsState.NumSamples;
                     }
-                    else if(arg.equals(("-minllchange")))
-                    {
-                        state = ArgsState.MinLLChange;
-                    }
                     else if(arg.equals(("-withEM")))
                     {
                         withEM = true;
@@ -331,11 +288,6 @@ public class LearnTest {
             evidenceFiles = new String[numDb];
             System.out.println("-e = " + Arrays.asList(evidenceFiles));
         }
-        if(softEvidenceFiles == null)
-        {
-            softEvidenceFiles = new String[numDb];
-            System.out.println("-se = " + Arrays.asList(softEvidenceFiles));
-        }
         if(evidPreds == null)
         {
             evidPreds = new ArrayList<>();
@@ -362,7 +314,6 @@ public class LearnTest {
         }
         System.out.println("-NumIter = " + numIter);
         System.out.println("-NumSamples = " + numSamples);
-        System.out.println("-minllchange = " + minllChange);
         System.out.println("-queryEvidence = " + queryEvidence);
         System.out.println("-usePrior = " + usePrior);
         System.out.println("-withEM = " + withEM);

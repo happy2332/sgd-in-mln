@@ -1,6 +1,7 @@
 package org.utd.cs.mln.alchemy.core;
 
 import org.utd.cs.gm.core.LogDouble;
+import org.utd.cs.gm.utility.Pair;
 
 import java.util.*;
 
@@ -9,16 +10,19 @@ import java.util.*;
  */
 public class GroundClause {
     public List<Integer> groundPredIndices; // Stores indices of groundpredicates coming in this clause. Indices are of MLN's groundPredicates list.
+    public List<Pair> groundPredPosIndices;
     public Map<Integer, Integer> globalToLocalPredIndex; // Maps index of MLN's groundPredicate to index of clause's groundpredicate
     public List<BitSet> grounPredBitSet;
     public LogDouble weight;
     public int formulaId; // id of groundformula of which this is a part
+    public boolean isSatisfied;
 
     public GroundClause() {
         groundPredIndices = new ArrayList<>();
         globalToLocalPredIndex = new HashMap<>();
         grounPredBitSet = new ArrayList<>();
         weight = LogDouble.ZERO;
+        isSatisfied = false;
         formulaId = 0;
 
     }
@@ -31,6 +35,7 @@ public class GroundClause {
         GroundClause that = (GroundClause) o;
 
         if (formulaId != that.formulaId) return false;
+        if (isSatisfied != that.isSatisfied) return false;
         if (!groundPredIndices.equals(that.groundPredIndices)) return false;
         if (!globalToLocalPredIndex.equals(that.globalToLocalPredIndex)) return false;
         if (!grounPredBitSet.equals(that.grounPredBitSet)) return false;
@@ -44,6 +49,7 @@ public class GroundClause {
         result = 31 * result + grounPredBitSet.hashCode();
         result = 31 * result + weight.hashCode();
         result = 31 * result + formulaId;
+        result = 31 * result + (isSatisfied ? 1 : 0);
         return result;
     }
 
@@ -55,6 +61,7 @@ public class GroundClause {
                 ", grounPredBitSet=" + grounPredBitSet +
                 ", weight=" + weight +
                 ", formulaId=" + formulaId +
+                ", isSatisfied=" + isSatisfied +
                 '}';
     }
 }
